@@ -16,10 +16,12 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     $department = mysqli_real_escape_string($conn, $specificLocation);
     $email = mysqli_real_escape_string($conn, $_POST['email']);
     $phone = mysqli_real_escape_string($conn, $_POST['phone']);
-    $categoryId = (int) ($_POST['category_id'] ?? 0);
+    $selectedCategory = trim($_POST['category'] ?? '');
+    $categoryId = 0;
     $category = '';
     foreach ($categoryOptions as $categoryOption) {
-        if ((int) $categoryOption['id'] === $categoryId) {
+        if ($categoryOption['jenis'] === $selectedCategory) {
+            $categoryId = (int) $categoryOption['id'];
             $category = mysqli_real_escape_string($conn, $categoryOption['jenis']);
             break;
         }
@@ -42,16 +44,16 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     // Fixed type definition string: 15 characters to match the 15 variables below
     mysqli_stmt_bind_param($stmt, 'sisssiissssssss', $status, $nextId, $noSiriPendaftaran, $noSiriAlat, $department, $jabatan, $categoryId, $pelapor, $ext, $email, $tarikhLaporan, $category, $category, $issue, $tarikhDiterima);
 
-    if ($categoryId > 0 && $category !== '' && mysqli_stmt_execute($stmt)) {
+    if ($category !== '' && mysqli_stmt_execute($stmt)) {
         $msg = "Your issue has been submitted successfully!";
     } else {
-        $msg = "Error: " . mysqli_stmt_error($stmt);
+        $msg = "Maaf, aduan anda tidak dapat dihantar buat masa ini. Sila cuba semula.";
     }
     mysqli_stmt_close($stmt);
 }
 
 // Use the LAN address so QR codes work from other devices on the network.
-$qrCodeUrl = "http://10.210.213.104" . $_SERVER['REQUEST_URI'];
+$qrCodeUrl = "http://10.249.122.104" . $_SERVER['REQUEST_URI'];
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -133,10 +135,10 @@ $qrCodeUrl = "http://10.210.213.104" . $_SERVER['REQUEST_URI'];
                             </div>
                             <div class="mb-3">
                                 <label class="form-label fw-bold small text-secondary" style="font-size: 0.75rem;">CATEGORY / KATEGORI</label>
-                                <select name="category_id" class="form-select" required>
+                                <select name="category" class="form-select" required>
                                     <option value="" disabled selected>Pilih kategori aduan</option>
                                     <?php foreach ($categoryOptions as $categoryOption): ?>
-                                        <option value="<?php echo (int) $categoryOption['id']; ?>"><?php echo htmlspecialchars($categoryOption['jenis']); ?></option>
+                                        <option value="<?php echo htmlspecialchars($categoryOption['jenis']); ?>"><?php echo htmlspecialchars($categoryOption['jenis']); ?></option>
                                     <?php endforeach; ?>
                                 </select>
                             </div>
@@ -144,7 +146,8 @@ $qrCodeUrl = "http://10.210.213.104" . $_SERVER['REQUEST_URI'];
                                 <label class="form-label fw-bold small text-secondary" style="font-size: 0.75rem;">ISSUE DESCRIPTION / BUTIRAN ADUAN</label>
                                 <textarea name="issue" class="form-control" rows="4" placeholder="Nyatakan masalah anda..." required></textarea>
                             </div>
-                            <button type="submit" class="btn btn-custom text-white w-100">Submit Issue</button>
+                            <!-- Ditukar kepada type="button" untuk kawalan pengesahan JavaScript -->
+                            <button type="button" id="submitBtn" class="btn btn-custom text-white w-100">Submit Issue</button>
                         </form>
                     </div>
                 </div>
@@ -165,6 +168,7 @@ $qrCodeUrl = "http://10.210.213.104" . $_SERVER['REQUEST_URI'];
     <script>
         const profileStorageKey = 'ehelpdesk_user_profile';
         const complaintForm = document.querySelector('form');
+        const submitBtn = document.getElementById('submitBtn');
 
         try {
             const savedProfile = JSON.parse(localStorage.getItem(profileStorageKey) || 'null');
@@ -174,7 +178,7 @@ $qrCodeUrl = "http://10.210.213.104" . $_SERVER['REQUEST_URI'];
                 document.querySelector('[name="phone"]').value = savedProfile.phone || '';
             }
 
-            complaintForm.addEventListener('submit', function () {
+            complaintForm.addEventListener('submit', function (e) {
                 localStorage.setItem(profileStorageKey, JSON.stringify({
                     name: document.querySelector('[name="name"]').value,
                     email: document.querySelector('[name="email"]').value,
@@ -184,6 +188,21 @@ $qrCodeUrl = "http://10.210.213.104" . $_SERVER['REQUEST_URI'];
         } catch (error) {
             // Continue normally if browser storage is unavailable.
         }
+
+        // Fungsi pengesahan (Setuju / Tidak) apabila butang Submit ditekan
+        submitBtn.addEventListener('click', function () {
+            if (complaintForm.checkValidity()) {
+                let confirmation = confirm("Adakah anda pasti untuk menghantar aduan kerosakan ini?\n\n[OK] = Setuju  |  [Cancel] = Tidak");
+                
+                if (confirmation) {
+                    complaintForm.submit(); // Hantar form jika pengguna pilih Setuju
+                } else {
+                    return false; // Batal jika pengguna pilih Tidak
+                }
+            } else {
+                complaintForm.reportValidity(); // Paparkan amaran HTML jika ada ruangan kosong
+            }
+        });
 
         new QRCode(document.getElementById("qrcode"), {
             text: "<?php echo $qrCodeUrl; ?>",

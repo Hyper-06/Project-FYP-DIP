@@ -21,11 +21,15 @@ if ($categoryResult) {
 
 // Handle form submission when admin clicks "TUGASKAN"
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['tugaskan'])) {
-    $categoryId = (int) ($_POST['category_id'] ?? 0);
+    $selectedCategory = trim($_POST['category_id'] ?? '');
+    $categoryId = 0;
     $jenis_kerosakan_tugas = '';
+    $categoryFound = false;
     foreach ($categoryOptions as $categoryOption) {
-        if ((int) $categoryOption['id'] === $categoryId) {
+        if ($categoryOption['jenis'] === $selectedCategory) {
+            $categoryId = (int) $categoryOption['id'];
             $jenis_kerosakan_tugas = mysqli_real_escape_string($conn, $categoryOption['jenis']);
+            $categoryFound = true;
             break;
         }
     }
@@ -40,8 +44,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['tugaskan'])) {
                     status = 'Dalam Tindakan'
                     WHERE id = $id";
     
-    if ($categoryId > 0 && $jenis_kerosakan_tugas !== '' && mysqli_query($conn, $updateQuery)) {
+    if ($categoryFound && $jenis_kerosakan_tugas !== '' && mysqli_query($conn, $updateQuery)) {
         $successMsg = "Penugasan berjaya dikemaskini!";
+    } elseif (!$categoryFound) {
+        $errorMsg = "Sila pilih kategori kerosakan yang sah.";
     } else {
         $errorMsg = "Ralat semasa mengemaskini penugasan: " . mysqli_error($conn);
     }
@@ -49,10 +55,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['tugaskan'])) {
 
 // Fetch the specific complaint details
 $query = "SELECT tl.*, COALESCE(NULLIF(tj.jabatan, ''), NULLIF(tl.lokasi, ''), '-') AS nama_jabatan,
-                 COALESCE(NULLIF(tk.jenis, ''), NULLIF(tl.jenis_kerosakan, ''), '-') AS nama_kategori
+                 COALESCE(NULLIF(tl.jenis_kerosakan, ''), NULLIF(tk.jenis, ''), '-') AS nama_kategori
           FROM tbllaporan tl 
           LEFT JOIN tbljabatan tj ON tj.id_jabatan = tl.jabatan 
-          LEFT JOIN tblkat_laporan tk ON tk.id = tl.kat_laporan
+          LEFT JOIN (SELECT id, MIN(jenis) AS jenis FROM tblkat_laporan GROUP BY id) tk ON tk.id = tl.kat_laporan
           WHERE tl.id = $id";
 $result = mysqli_query($conn, $query);
 $row = mysqli_fetch_assoc($result);
@@ -62,12 +68,9 @@ if (!$row) {
     exit();
 }
 
-// Use the optional staff table when available; otherwise use existing admin accounts.
-$staffTableCheck = mysqli_query($conn, "SHOW TABLES LIKE 'tblstaf'");
-$hasStaffTable = $staffTableCheck && mysqli_num_rows($staffTableCheck) > 0;
-$staffQuery = $hasStaffTable
-    ? "SELECT nama_staf, jawatan FROM tblstaf ORDER BY nama_staf ASC"
-    : "SELECT nama, jawatan FROM tbladmin ORDER BY nama ASC";
+$staffQuery = "SELECT nama, jawatan FROM tbladmin
+    WHERE COALESCE(jawatan, '') <> 'Pengguna'
+    ORDER BY nama ASC";
 $staffResult = mysqli_query($conn, $staffQuery);
 ?>
 <!DOCTYPE html>
@@ -81,6 +84,7 @@ $staffResult = mysqli_query($conn, $staffQuery);
     <style>
         body { background-color: #f4f6f9; font-family: Arial, sans-serif; }
         .sidebar { background: #1e293b; color: white; min-height: 100vh; padding: 20px; }
+        .admin-logo { display: block; width: 155px; max-height: 100px; object-fit: contain; background: #fff; border-radius: 10px; padding: 10px; margin: 0 auto 18px; }
         .sidebar a { color: #94a3b8; text-decoration: none; display: block; padding: 12px 18px; border-radius: 12px; margin-bottom: 8px; transition: 0.2s; font-size: 0.95rem; }
         .sidebar a:hover { background-color: rgba(255, 255, 255, 0.05); color: #ffffff; }
         .sidebar a.active { background-color: #2563eb; color: white; box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3); }
@@ -93,6 +97,7 @@ $staffResult = mysqli_query($conn, $staffQuery);
         <div class="row">
             <!-- Sidebar -->
             <div class="col-md-3 col-lg-2 sidebar d-none d-md-block">
+                <img src="puo_logo.png" alt="Logo PUO" class="admin-logo">
                 <h4 class="fw-bold text-white mb-4 ps-2">eHELPDESK <span class="text-primary fs-6">PUO</span></h4>
                 <a href="admin_dashboard.php"><i class="fa-solid fa-chart-line me-2"></i> Dashboard</a>
                 <a href="admin_senarai.php" class="active"><i class="fa-solid fa-table-list me-2"></i> Senarai Aduan</a>
@@ -182,7 +187,7 @@ $staffResult = mysqli_query($conn, $staffQuery);
                                     <select name="category_id" class="form-select" required>
                                         <option value="">Sila Pilih</option>
                                         <?php foreach ($categoryOptions as $categoryOption): ?>
-                                            <option value="<?php echo (int) $categoryOption['id']; ?>" <?php echo ((int) ($row['kat_laporan'] ?? 0) === (int) $categoryOption['id']) ? 'selected' : ''; ?>><?php echo htmlspecialchars($categoryOption['jenis']); ?></option>
+                                            <option value="<?php echo htmlspecialchars($categoryOption['jenis']); ?>" <?php echo (($row['jenis_kerosakan'] ?? '') === $categoryOption['jenis']) ? 'selected' : ''; ?>><?php echo htmlspecialchars($categoryOption['jenis']); ?></option>
                                         <?php endforeach; ?>
                                     </select>
                                 </div>
@@ -196,7 +201,7 @@ $staffResult = mysqli_query($conn, $staffQuery);
                                         <?php 
                                         if ($staffResult) {
                                             while ($staf = mysqli_fetch_assoc($staffResult)) {
-                                                $staffName = $hasStaffTable ? $staf['nama_staf'] : $staf['nama'];
+                                                $staffName = $staf['nama'];
                                                 $selected = (isset($row['pemeriksa']) && $row['pemeriksa'] == $staffName) ? 'selected' : '';
                                                 echo '<option value="' . htmlspecialchars($staffName) . '" ' . $selected . '>' . htmlspecialchars($staffName) . ' (' . htmlspecialchars($staf['jawatan']) . ')</option>';
                                             }

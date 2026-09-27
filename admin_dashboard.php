@@ -34,7 +34,7 @@ $jabatanLabels = []; $jabatanData = [];
 $kategoriLabels = []; $kategoriData = [];
 $lokasiLabels = []; $lokasiData = [];
 $statusCounts = ['total' => 0, 'Baru' => 0, 'Dalam Tindakan' => 0, 'Selesai' => 0];
-$trendLabels = []; $trendData = [];
+$trendLabels = []; $trendData = []; $trendPeriods = [];
 
 $statusQuery = "SELECT COALESCE(NULLIF(status, ''), 'Baru') AS status_label, COUNT(*) AS total
                 FROM tbllaporan
@@ -66,6 +66,60 @@ if ($trendResult) {
     while ($row = mysqli_fetch_assoc($trendResult)) {
         $trendLabels[] = $row['label'];
         $trendData[] = (int) $row['total'];
+        $trendPeriods[] = sprintf('%04d-%02d', (int) $row['tahun'], (int) $row['bulan']);
+    }
+}
+
+$selectedTrendPeriod = trim((string) ($_GET['trend_detail'] ?? ''));
+$trendDetails = [];
+if ($selectedTrendPeriod !== '' && in_array($selectedTrendPeriod, $trendPeriods, true)) {
+    $detailYear = (int) substr($selectedTrendPeriod, 0, 4);
+    $detailMonth = (int) substr($selectedTrendPeriod, 5, 2);
+    $trendDetailQuery = "
+        SELECT id, tarikh_laporan, pelapor, lokasi,
+               COALESCE(NULLIF(status, ''), 'Baru') AS status_label, masalah
+        FROM tbllaporan
+        WHERE YEAR(STR_TO_DATE(tarikh_laporan, '%Y-%m-%d %H:%i:%s')) = ?
+          AND MONTH(STR_TO_DATE(tarikh_laporan, '%Y-%m-%d %H:%i:%s')) = ?
+          $dateFilterSub
+        ORDER BY STR_TO_DATE(tarikh_laporan, '%Y-%m-%d %H:%i:%s') DESC
+    ";
+    $trendDetailStatement = mysqli_prepare($conn, $trendDetailQuery);
+    if ($trendDetailStatement) {
+        mysqli_stmt_bind_param($trendDetailStatement, 'ii', $detailYear, $detailMonth);
+        mysqli_stmt_execute($trendDetailStatement);
+        $trendDetailResult = mysqli_stmt_get_result($trendDetailStatement);
+        if ($trendDetailResult) {
+            while ($detailRow = mysqli_fetch_assoc($trendDetailResult)) {
+                $trendDetails[] = $detailRow;
+            }
+        }
+        mysqli_stmt_close($trendDetailStatement);
+    }
+}
+
+$selectedStatus = trim((string) ($_GET['status_detail'] ?? ''));
+$statusDetails = [];
+if ($selectedStatus !== '' && array_key_exists($selectedStatus, $statusCounts) && $selectedStatus !== 'total') {
+    $statusDetailQuery = "
+        SELECT id, tarikh_laporan, pelapor, lokasi,
+               COALESCE(NULLIF(status, ''), 'Baru') AS status_label, masalah
+        FROM tbllaporan
+        $whereClause
+          AND COALESCE(NULLIF(status, ''), 'Baru') = ?
+        ORDER BY STR_TO_DATE(tarikh_laporan, '%Y-%m-%d %H:%i:%s') DESC
+    ";
+    $statusDetailStatement = mysqli_prepare($conn, $statusDetailQuery);
+    if ($statusDetailStatement) {
+        mysqli_stmt_bind_param($statusDetailStatement, 's', $selectedStatus);
+        mysqli_stmt_execute($statusDetailStatement);
+        $statusDetailResult = mysqli_stmt_get_result($statusDetailStatement);
+        if ($statusDetailResult) {
+            while ($detailRow = mysqli_fetch_assoc($statusDetailResult)) {
+                $statusDetails[] = $detailRow;
+            }
+        }
+        mysqli_stmt_close($statusDetailStatement);
     }
 }
 
@@ -87,14 +141,20 @@ if ($trendResult) {
         }
     }
 
-    // 2. Statistik Kategori Aduan (Linked with category table / text values)
+    // 2. Statistik Kategori Aduan (Use the category list managed in admin_kategori.php)
     $kategoriQuery = "
-        SELECT COALESCE(NULLIF(tk.jenis, ''), NULLIF(tl.jenis_kerosakan, ''), 'Tidak Diketahui') AS label, COUNT(tl.id) AS total
-        FROM tbllaporan tl
-        LEFT JOIN tblkat_laporan tk ON tk.id = tl.kat_laporan
-        $whereClause
-        GROUP BY COALESCE(NULLIF(tk.jenis, ''), NULLIF(tl.jenis_kerosakan, ''), 'Tidak Diketahui')
-        ORDER BY total DESC
+        SELECT COALESCE(NULLIF(tk.jenis, ''), '-') AS label, COUNT(tl.id) AS total
+        FROM tblkat_laporan tk
+        LEFT JOIN tbllaporan tl ON (
+            (tk.id = tl.kat_laporan AND tk.id IN (
+                SELECT id FROM tblkat_laporan GROUP BY id HAVING COUNT(*) = 1
+            ))
+            OR (tk.jenis = tl.jenis_kerosakan AND tk.id IN (
+                SELECT id FROM tblkat_laporan GROUP BY id HAVING COUNT(*) > 1
+            ))
+        ) $dateFilterSub
+        GROUP BY tk.id, tk.jenis
+        ORDER BY tk.id ASC
     ";
     $kategoriResult = mysqli_query($conn, $kategoriQuery);
     if ($kategoriResult) {
@@ -106,21 +166,86 @@ if ($trendResult) {
         }
     }
 
-    // 3. Statistik Lokasi Tempat
+    $selectedCategory = trim((string) ($_GET['kategori'] ?? ''));
+    $categoryDetails = [];
+    if ($selectedCategory !== '' && in_array($selectedCategory, $kategoriLabels, true)) {
+        $detailQuery = "
+            SELECT tl.id, tl.tarikh_laporan, tl.pelapor, tl.lokasi,
+                   COALESCE(NULLIF(tl.status, ''), 'Baru') AS status_label, tl.masalah
+            FROM tblkat_laporan tk
+            INNER JOIN tbllaporan tl ON (
+                (tk.id = tl.kat_laporan AND tk.id IN (
+                    SELECT id FROM tblkat_laporan GROUP BY id HAVING COUNT(*) = 1
+                ))
+                OR (tk.jenis = tl.jenis_kerosakan AND tk.id IN (
+                    SELECT id FROM tblkat_laporan GROUP BY id HAVING COUNT(*) > 1
+                ))
+            ) $dateFilterSub
+            WHERE tk.jenis = ?
+            ORDER BY STR_TO_DATE(tl.tarikh_laporan, '%Y-%m-%d %H:%i:%s') DESC
+        ";
+        $detailStatement = mysqli_prepare($conn, $detailQuery);
+        if ($detailStatement) {
+            mysqli_stmt_bind_param($detailStatement, 's', $selectedCategory);
+            mysqli_stmt_execute($detailStatement);
+            $detailResult = mysqli_stmt_get_result($detailStatement);
+            if ($detailResult) {
+                while ($detailRow = mysqli_fetch_assoc($detailResult)) {
+                    $categoryDetails[] = $detailRow;
+                }
+            }
+            mysqli_stmt_close($detailStatement);
+        }
+    }
+
+    // 3. Statistik lokasi yang ditetapkan pada fail borang
+    $lokasiLabels = [
+        'Administrator Office', 'Anjung Premier', 'APDV1', 'APDV2', 'APDV3', 'APDV4',
+        'APPS1', 'APPS2', 'Bilik Seminar', 'CNW1', 'CNW2', 'CNW3', 'CSD', 'DK JTMK',
+        'Hypermedia 2', 'IT1', 'IT2', 'IT3', 'Tandas', 'YTM'
+    ];
+    $locationCounts = array_fill_keys(array_map('strtolower', $lokasiLabels), 0);
     $lokasiQuery = "
-        SELECT COALESCE(lokasi, 'Tidak Dinyatakan') AS label, COUNT(*) AS total
+        SELECT LOWER(TRIM(lokasi)) AS label_key, COUNT(*) AS total
         FROM tbllaporan
         $whereClause
-        GROUP BY COALESCE(lokasi, 'Tidak Dinyatakan')
-        ORDER BY total DESC
+          AND lokasi IS NOT NULL AND TRIM(lokasi) <> ''
+        GROUP BY LOWER(TRIM(lokasi))
     ";
     $lokasiResult = mysqli_query($conn, $lokasiQuery);
     if ($lokasiResult) {
         while ($row = mysqli_fetch_assoc($lokasiResult)) {
-            $lokasiLabels[] = $row['label'] ?? 'Tidak Dinyatakan';
-            $lokasiData[] = (int) $row['total'];
+            if (array_key_exists($row['label_key'], $locationCounts)) {
+                $locationCounts[$row['label_key']] = (int) $row['total'];
+            }
         }
 }
+    $lokasiData = array_values($locationCounts);
+
+    $selectedLocation = trim((string) ($_GET['lokasi_detail'] ?? ''));
+    $locationDetails = [];
+    if ($selectedLocation !== '' && in_array($selectedLocation, $lokasiLabels, true)) {
+        $locationDetailQuery = "
+            SELECT id, tarikh_laporan, pelapor, lokasi,
+                   COALESCE(NULLIF(status, ''), 'Baru') AS status_label, masalah
+            FROM tbllaporan
+            $whereClause
+              AND LOWER(TRIM(lokasi)) = LOWER(?)
+            ORDER BY STR_TO_DATE(tarikh_laporan, '%Y-%m-%d %H:%i:%s') DESC
+        ";
+        $locationDetailStatement = mysqli_prepare($conn, $locationDetailQuery);
+        if ($locationDetailStatement) {
+            mysqli_stmt_bind_param($locationDetailStatement, 's', $selectedLocation);
+            mysqli_stmt_execute($locationDetailStatement);
+            $locationDetailResult = mysqli_stmt_get_result($locationDetailStatement);
+            if ($locationDetailResult) {
+                while ($detailRow = mysqli_fetch_assoc($locationDetailResult)) {
+                    $locationDetails[] = $detailRow;
+                }
+            }
+            mysqli_stmt_close($locationDetailStatement);
+        }
+    }
 
 $yearsQuery = "
     SELECT DISTINCT YEAR(STR_TO_DATE(tarikh_laporan, '%Y-%m-%d %H:%i:%s')) AS tahun
@@ -145,6 +270,7 @@ $yearsResult = mysqli_query($conn, $yearsQuery);
     <style>
         body { background-color: #f4f6f9; font-family: Arial, sans-serif; }
         .sidebar { background: #1e293b; color: white; min-height: 100vh; padding: 20px; }
+        .admin-logo { display: block; width: 155px; max-height: 100px; object-fit: contain; background: #fff; border-radius: 10px; padding: 10px; margin: 0 auto 18px; }
         .sidebar a { color: #94a3b8; text-decoration: none; display: block; padding: 12px 18px; border-radius: 12px; margin-bottom: 8px; transition: 0.2s; font-size: 0.95rem; }
         .sidebar a:hover { background-color: rgba(255, 255, 255, 0.05); color: #ffffff; }
         .sidebar a.active { background-color: #2563eb; color: white; box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3); }
@@ -174,6 +300,7 @@ $yearsResult = mysqli_query($conn, $yearsQuery);
         <div class="row">
             <!-- Sidebar -->
             <div class="col-md-3 col-lg-2 sidebar d-none d-md-block">
+                <img src="puo_logo.png" alt="Logo PUO" class="admin-logo">
                 <h4 class="fw-bold text-white mb-4 ps-2">eHELPDESK <span class="text-primary fs-6">PUO</span></h4>
                 <a href="admin_dashboard.php" class="active"><i class="fa-solid fa-chart-line me-2"></i> Dashboard</a>
                 <a href="admin_senarai.php"><i class="fa-solid fa-table-list me-2"></i> Senarai Aduan</a>
@@ -315,13 +442,146 @@ $yearsResult = mysqli_query($conn, $yearsQuery);
                     </div>
                 </div>
 
+                <?php if ($selectedTrendPeriod !== '' && in_array($selectedTrendPeriod, $trendPeriods, true)): ?>
+                    <div class="row g-4 mb-4" id="trend-details">
+                        <div class="col-12">
+                            <div class="card">
+                                <div class="card-body p-4">
+                                    <div class="d-flex justify-content-between align-items-start mb-3">
+                                        <div>
+                                            <div class="section-heading">Butiran Aduan: <?php echo htmlspecialchars($selectedTrendPeriod, ENT_QUOTES, 'UTF-8'); ?></div>
+                                            <div class="dashboard-subtitle">Senarai aduan bagi bulan yang dipilih pada carta</div>
+                                        </div>
+                                        <a class="btn btn-sm btn-outline-secondary" href="admin_dashboard.php?<?php echo htmlspecialchars(http_build_query([
+                                            'tahun' => $selectedYear,
+                                            'bulan_mula' => $selectedMonthStart,
+                                            'bulan_tamat' => $selectedMonthEnd
+                                        ]), ENT_QUOTES, 'UTF-8'); ?>">Tutup butiran</a>
+                                    </div>
+                                    <div class="table-responsive">
+                                        <table class="table table-sm table-hover align-middle mb-0">
+                                            <thead>
+                                                <tr>
+                                                    <th scope="col">ID Aduan</th>
+                                                    <th scope="col">Tarikh</th>
+                                                    <th scope="col">Pelapor</th>
+                                                    <th scope="col">Lokasi</th>
+                                                    <th scope="col">Status</th>
+                                                    <th scope="col">Masalah</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <?php if (empty($trendDetails)): ?>
+                                                    <tr><td colspan="6" class="text-center text-muted py-4">Tiada butiran aduan untuk bulan ini.</td></tr>
+                                                <?php else: ?>
+                                                    <?php foreach ($trendDetails as $detail): ?>
+                                                        <tr>
+                                                            <td><?php echo htmlspecialchars((string) ($detail['id'] ?? '-'), ENT_QUOTES, 'UTF-8'); ?></td>
+                                                            <td><?php echo htmlspecialchars($detail['tarikh_laporan'] ?? '-', ENT_QUOTES, 'UTF-8'); ?></td>
+                                                            <td><?php echo htmlspecialchars($detail['pelapor'] ?? '-', ENT_QUOTES, 'UTF-8'); ?></td>
+                                                            <td><?php echo htmlspecialchars($detail['lokasi'] ?? '-', ENT_QUOTES, 'UTF-8'); ?></td>
+                                                            <td><?php echo htmlspecialchars($detail['status_label'] ?? '-', ENT_QUOTES, 'UTF-8'); ?></td>
+                                                            <td><?php echo htmlspecialchars($detail['masalah'] ?? '-', ENT_QUOTES, 'UTF-8'); ?></td>
+                                                        </tr>
+                                                    <?php endforeach; ?>
+                                                <?php endif; ?>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                <?php endif; ?>
+
+                <?php if ($selectedStatus !== '' && array_key_exists($selectedStatus, $statusCounts) && $selectedStatus !== 'total'): ?>
+                    <div class="row g-4 mb-4" id="status-details">
+                        <div class="col-12">
+                            <div class="card">
+                                <div class="card-body p-4">
+                                    <div class="d-flex justify-content-between align-items-start mb-3">
+                                        <div>
+                                            <div class="section-heading">Butiran Aduan: <?php echo htmlspecialchars($selectedStatus, ENT_QUOTES, 'UTF-8'); ?></div>
+                                            <div class="dashboard-subtitle">Senarai aduan bagi status yang dipilih pada carta</div>
+                                        </div>
+                                        <a class="btn btn-sm btn-outline-secondary" href="admin_dashboard.php?<?php echo htmlspecialchars(http_build_query([
+                                            'tahun' => $selectedYear,
+                                            'bulan_mula' => $selectedMonthStart,
+                                            'bulan_tamat' => $selectedMonthEnd
+                                        ]), ENT_QUOTES, 'UTF-8'); ?>">Tutup butiran</a>
+                                    </div>
+                                    <div class="table-responsive">
+                                        <table class="table table-sm table-hover align-middle mb-0">
+                                            <thead>
+                                                <tr>
+                                                    <th scope="col">ID Aduan</th>
+                                                    <th scope="col">Tarikh</th>
+                                                    <th scope="col">Pelapor</th>
+                                                    <th scope="col">Lokasi</th>
+                                                    <th scope="col">Status</th>
+                                                    <th scope="col">Masalah</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <?php if (empty($statusDetails)): ?>
+                                                    <tr><td colspan="6" class="text-center text-muted py-4">Tiada butiran aduan untuk status ini.</td></tr>
+                                                <?php else: ?>
+                                                    <?php foreach ($statusDetails as $detail): ?>
+                                                        <tr>
+                                                            <td><?php echo htmlspecialchars((string) ($detail['id'] ?? '-'), ENT_QUOTES, 'UTF-8'); ?></td>
+                                                            <td><?php echo htmlspecialchars($detail['tarikh_laporan'] ?? '-', ENT_QUOTES, 'UTF-8'); ?></td>
+                                                            <td><?php echo htmlspecialchars($detail['pelapor'] ?? '-', ENT_QUOTES, 'UTF-8'); ?></td>
+                                                            <td><?php echo htmlspecialchars($detail['lokasi'] ?? '-', ENT_QUOTES, 'UTF-8'); ?></td>
+                                                            <td><?php echo htmlspecialchars($detail['status_label'] ?? '-', ENT_QUOTES, 'UTF-8'); ?></td>
+                                                            <td><?php echo htmlspecialchars($detail['masalah'] ?? '-', ENT_QUOTES, 'UTF-8'); ?></td>
+                                                        </tr>
+                                                    <?php endforeach; ?>
+                                                <?php endif; ?>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                <?php endif; ?>
+
                 <div class="row g-4 mb-4">
                     <div class="col-12 col-xl-6">
                         <div class="card h-100">
                             <div class="card-body p-4">
                                 <div class="section-heading mb-1"><i class="fa-solid fa-screwdriver-wrench text-warning me-2"></i>Kategori Aduan</div>
                                 <div class="dashboard-subtitle mb-3">Jumlah laporan mengikut kategori</div>
-                                <div class="small-chart-container"><canvas id="kategoriChart"></canvas></div>
+                                <div class="table-responsive">
+                                    <table class="table table-sm table-hover align-middle mb-0">
+                                        <thead>
+                                            <tr>
+                                                <th scope="col">Kategori</th>
+                                                <th scope="col" class="text-end">Jumlah Aduan</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <?php if (empty($kategoriLabels)): ?>
+                                                <tr><td colspan="2" class="text-center text-muted py-4">Tiada rekod aduan</td></tr>
+                                            <?php else: ?>
+                                                <?php foreach ($kategoriLabels as $index => $label): ?>
+                                                    <?php
+                                                    $categoryUrl = 'admin_dashboard.php?' . http_build_query([
+                                                        'tahun' => $selectedYear,
+                                                        'bulan_mula' => $selectedMonthStart,
+                                                        'bulan_tamat' => $selectedMonthEnd,
+                                                        'kategori' => $label
+                                                    ]) . '#kategori-details';
+                                                    ?>
+                                                    <tr>
+                                                        <td><a class="link-primary text-decoration-none fw-semibold" href="<?php echo htmlspecialchars($categoryUrl, ENT_QUOTES, 'UTF-8'); ?>"><?php echo htmlspecialchars($label, ENT_QUOTES, 'UTF-8'); ?></a></td>
+                                                        <td class="text-end fw-semibold"><?php echo number_format($kategoriData[$index]); ?></td>
+                                                    </tr>
+                                                <?php endforeach; ?>
+                                            <?php endif; ?>
+                                        </tbody>
+                                    </table>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -329,12 +589,116 @@ $yearsResult = mysqli_query($conn, $yearsQuery);
                         <div class="card h-100">
                             <div class="card-body p-4">
                                 <div class="section-heading mb-1"><i class="fa-solid fa-location-dot text-danger me-2"></i>Lokasi Tempat</div>
-                                <div class="dashboard-subtitle mb-3">Jumlah laporan mengikut lokasi</div>
+                                <div class="dashboard-subtitle mb-3">Jumlah laporan mengikut lokasi fail borang</div>
                                 <div class="small-chart-container"><canvas id="lokasiChart"></canvas></div>
                             </div>
                         </div>
                     </div>
                 </div>
+
+                <?php if ($selectedLocation !== '' && in_array($selectedLocation, $lokasiLabels, true)): ?>
+                    <div class="row g-4 mb-4" id="location-details">
+                        <div class="col-12">
+                            <div class="card">
+                                <div class="card-body p-4">
+                                    <div class="d-flex justify-content-between align-items-start mb-3">
+                                        <div>
+                                            <div class="section-heading">Butiran Aduan: <?php echo htmlspecialchars($selectedLocation, ENT_QUOTES, 'UTF-8'); ?></div>
+                                            <div class="dashboard-subtitle">Semua aduan daripada lokasi fail borang ini</div>
+                                        </div>
+                                        <a class="btn btn-sm btn-outline-secondary" href="admin_dashboard.php?<?php echo htmlspecialchars(http_build_query([
+                                            'tahun' => $selectedYear,
+                                            'bulan_mula' => $selectedMonthStart,
+                                            'bulan_tamat' => $selectedMonthEnd
+                                        ]), ENT_QUOTES, 'UTF-8'); ?>">Tutup butiran</a>
+                                    </div>
+                                    <div class="table-responsive">
+                                        <table class="table table-sm table-hover align-middle mb-0">
+                                            <thead>
+                                                <tr>
+                                                    <th scope="col">ID Aduan</th>
+                                                    <th scope="col">Tarikh</th>
+                                                    <th scope="col">Pelapor</th>
+                                                    <th scope="col">Lokasi</th>
+                                                    <th scope="col">Status</th>
+                                                    <th scope="col">Masalah</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <?php if (empty($locationDetails)): ?>
+                                                    <tr><td colspan="6" class="text-center text-muted py-4">Tiada aduan untuk lokasi ini.</td></tr>
+                                                <?php else: ?>
+                                                    <?php foreach ($locationDetails as $detail): ?>
+                                                        <tr>
+                                                            <td><?php echo htmlspecialchars((string) ($detail['id'] ?? '-'), ENT_QUOTES, 'UTF-8'); ?></td>
+                                                            <td><?php echo htmlspecialchars($detail['tarikh_laporan'] ?? '-', ENT_QUOTES, 'UTF-8'); ?></td>
+                                                            <td><?php echo htmlspecialchars($detail['pelapor'] ?? '-', ENT_QUOTES, 'UTF-8'); ?></td>
+                                                            <td><?php echo htmlspecialchars($detail['lokasi'] ?? '-', ENT_QUOTES, 'UTF-8'); ?></td>
+                                                            <td><?php echo htmlspecialchars($detail['status_label'] ?? '-', ENT_QUOTES, 'UTF-8'); ?></td>
+                                                            <td><?php echo htmlspecialchars($detail['masalah'] ?? '-', ENT_QUOTES, 'UTF-8'); ?></td>
+                                                        </tr>
+                                                    <?php endforeach; ?>
+                                                <?php endif; ?>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                <?php endif; ?>
+
+                <?php if ($selectedCategory !== '' && in_array($selectedCategory, $kategoriLabels, true)): ?>
+                    <div class="row g-4 mb-4" id="kategori-details">
+                        <div class="col-12">
+                            <div class="card">
+                                <div class="card-body p-4">
+                                    <div class="d-flex justify-content-between align-items-start mb-3">
+                                        <div>
+                                            <div class="section-heading">Butiran Aduan: <?php echo htmlspecialchars($selectedCategory, ENT_QUOTES, 'UTF-8'); ?></div>
+                                            <div class="dashboard-subtitle">Senarai aduan yang sepadan dengan kategori ini</div>
+                                        </div>
+                                        <a class="btn btn-sm btn-outline-secondary" href="admin_dashboard.php?<?php echo htmlspecialchars(http_build_query([
+                                            'tahun' => $selectedYear,
+                                            'bulan_mula' => $selectedMonthStart,
+                                            'bulan_tamat' => $selectedMonthEnd
+                                        ]), ENT_QUOTES, 'UTF-8'); ?>">Tutup butiran</a>
+                                    </div>
+                                    <div class="table-responsive">
+                                        <table class="table table-sm table-hover align-middle mb-0">
+                                            <thead>
+                                                <tr>
+                                                    <th scope="col">ID Aduan</th>
+                                                    <th scope="col">Tarikh</th>
+                                                    <th scope="col">Pelapor</th>
+                                                    <th scope="col">Lokasi</th>
+                                                    <th scope="col">Status</th>
+                                                    <th scope="col">Masalah</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <?php if (empty($categoryDetails)): ?>
+                                                    <tr><td colspan="6" class="text-center text-muted py-4">Tiada butiran aduan untuk kategori ini.</td></tr>
+                                                <?php else: ?>
+                                                    <?php foreach ($categoryDetails as $detail): ?>
+                                                        <tr>
+                                                            <td><?php echo htmlspecialchars((string) ($detail['id'] ?? '-'), ENT_QUOTES, 'UTF-8'); ?></td>
+                                                            <td><?php echo htmlspecialchars($detail['tarikh_laporan'] ?? '-', ENT_QUOTES, 'UTF-8'); ?></td>
+                                                            <td><?php echo htmlspecialchars($detail['pelapor'] ?? '-', ENT_QUOTES, 'UTF-8'); ?></td>
+                                                            <td><?php echo htmlspecialchars($detail['lokasi'] ?? '-', ENT_QUOTES, 'UTF-8'); ?></td>
+                                                            <td><?php echo htmlspecialchars($detail['status_label'] ?? '-', ENT_QUOTES, 'UTF-8'); ?></td>
+                                                            <td><?php echo htmlspecialchars($detail['masalah'] ?? '-', ENT_QUOTES, 'UTF-8'); ?></td>
+                                                        </tr>
+                                                    <?php endforeach; ?>
+                                                <?php endif; ?>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                <?php endif; ?>
 
                 <script>
                         const palette = ['#2563eb', '#f59e0b', '#10b981', '#ef4444', '#8b5cf6', '#64748b', '#06b6d4', '#ec4899'];
@@ -343,6 +707,7 @@ $yearsResult = mysqli_query($conn, $yearsQuery);
                             trend: {
                                 labels: <?php echo json_encode($trendLabels); ?>,
                                 data: <?php echo json_encode($trendData); ?>,
+                                periods: <?php echo json_encode($trendPeriods); ?>,
                                 labelName: 'Jumlah Aduan'
                             },
                             status: {
@@ -355,15 +720,10 @@ $yearsResult = mysqli_query($conn, $yearsQuery);
                                 data: <?php echo json_encode($jabatanData); ?>,
                                 labelName: 'Jumlah Aduan Jabatan'
                             },
-                            kategori: {
-                                labels: <?php echo json_encode($kategoriLabels); ?>,
-                                data: <?php echo json_encode($kategoriData); ?>,
-                                labelName: 'Jumlah Aduan Kategori'
-                            },
                             lokasi: {
                                 labels: <?php echo json_encode($lokasiLabels); ?>,
                                 data: <?php echo json_encode($lokasiData); ?>,
-                                labelName: 'Jumlah Aduan Lokasi'
+                                labelName: 'Jumlah Aduan Mengikut Lokasi'
                             }
                         };
 
@@ -408,6 +768,40 @@ $yearsResult = mysqli_query($conn, $yearsQuery);
                                             position: 'bottom' 
                                         }
                                     },
+                                    onClick: (event, activeElements) => {
+                                        if (!['trend', 'status', 'lokasi'].includes(chartKey) || activeElements.length === 0) {
+                                            return;
+                                        }
+
+                                        const params = new URLSearchParams(window.location.search);
+                                        params.delete('trend_detail');
+                                        params.delete('status_detail');
+                                        params.delete('lokasi_detail');
+                                        params.delete('kategori');
+
+                                        if (chartKey === 'trend') {
+                                            const period = rawData.trend.periods[activeElements[0].index];
+                                            if (!period) {
+                                                return;
+                                            }
+                                            params.set('trend_detail', period);
+                                            window.location.href = `${window.location.pathname}?${params.toString()}#trend-details`;
+                                        } else if (chartKey === 'status') {
+                                            const status = rawData.status.labels[activeElements[0].index];
+                                            if (!status) {
+                                                return;
+                                            }
+                                            params.set('status_detail', status);
+                                            window.location.href = `${window.location.pathname}?${params.toString()}#status-details`;
+                                        } else {
+                                            const location = rawData.lokasi.labels[activeElements[0].index];
+                                            if (!location) {
+                                                return;
+                                            }
+                                            params.set('lokasi_detail', location);
+                                            window.location.href = `${window.location.pathname}?${params.toString()}#location-details`;
+                                        }
+                                    },
                                     scales: isCircular ? {} : {
                                         x: {
                                             ticks: {
@@ -433,7 +827,6 @@ $yearsResult = mysqli_query($conn, $yearsQuery);
                         function renderDashboardCharts() {
                             renderChart('trend', 'line');
                             renderChart('status', 'doughnut');
-                            renderChart('kategori', 'pie');
                             renderChart('lokasi', 'bar');
                         }
 

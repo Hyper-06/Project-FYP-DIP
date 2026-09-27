@@ -1,78 +1,89 @@
 <?php
 session_start();
-require_once 'db.php'; // Adjust to your database connection file
+require_once 'db.php';
+
+if (($_SESSION['role'] ?? '') === 'staff' && !empty($_SESSION['staff_no_kp'])) {
+    $existingStaffNo = (string) $_SESSION['staff_no_kp'];
+    $existingStatement = mysqli_prepare($conn, "SELECT id, no_kp, nama, jawatan
+        FROM tbladmin WHERE no_kp = ? AND COALESCE(jawatan, '') <> 'Pengguna' LIMIT 1");
+    if ($existingStatement) {
+        mysqli_stmt_bind_param($existingStatement, 's', $existingStaffNo);
+        mysqli_stmt_execute($existingStatement);
+        $existingResult = mysqli_stmt_get_result($existingStatement);
+        $existingStaff = $existingResult ? mysqli_fetch_assoc($existingResult) : null;
+        mysqli_stmt_close($existingStatement);
+    } else {
+        $existingStaff = null;
+    }
+
+    if ($existingStaff) {
+        $_SESSION['staff_user_id'] = (int) $existingStaff['id'];
+        $_SESSION['staff_nama'] = (string) $existingStaff['nama'];
+        $_SESSION['staff_jawatan'] = (string) $existingStaff['jawatan'];
+        header('Location: staf_dashboard.php');
+        exit();
+    }
+
+    unset($_SESSION['role'], $_SESSION['staff_user_id'], $_SESSION['staff_no_kp'], $_SESSION['staff_nama'], $_SESSION['staff_jawatan']);
+}
+
+if (empty($_SESSION['csrf_staf_login'])) {
+    $_SESSION['csrf_staf_login'] = bin2hex(random_bytes(32));
+}
 
 $error = '';
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $token = $_POST['csrf_token'] ?? '';
+    $staffIdentifier = trim($_POST['staff_no_kp'] ?? '');
+    $password = (string) ($_POST['password'] ?? '');
 
-if ($_SERVER["REQUEST_METHOD"] == "POST") {
-    $username = trim($_POST['username'] ?? '');
-    $password = trim($_POST['password'] ?? '');
-
-    if (empty($username) || empty($password)) {
-        $error = "Sila isi ID pengguna dan kata laluan.";
-    } elseif (strlen($username) > 12) {
-        $error = "ID pengguna maksimum 12 aksara.";
-    } elseif (strlen($password) < 5 || strlen($password) > 20) {
-        $error = "Kata laluan mesti antara 5 hingga 20 aksara.";
+    if (!hash_equals($_SESSION['csrf_staf_login'], $token)) {
+        $error = 'Sesi borang tamat. Sila cuba sekali lagi.';
+    } elseif ($staffIdentifier === '' || $password === '') {
+        $error = 'Sila isi nombor ID staf dan kata laluan.';
     } else {
-        $stmt = $conn->prepare("SELECT id, no_kp, nama, katalaluan FROM tbladmin WHERE no_kp = ? LIMIT 1");
-        $stmt->bind_param("s", $username);
-        $stmt->execute();
-        $result = $stmt->get_result();
+        $statement = mysqli_prepare($conn, "SELECT id, no_kp, nama, jawatan, katalaluan
+            FROM tbladmin
+            WHERE (no_kp = ? OR CAST(id AS CHAR) = ?)
+              AND COALESCE(jawatan, '') <> 'Pengguna'
+            LIMIT 1");
+        if ($statement) {
+            mysqli_stmt_bind_param($statement, 'ss', $staffIdentifier, $staffIdentifier);
+            mysqli_stmt_execute($statement);
+            $result = mysqli_stmt_get_result($statement);
+            $account = $result ? mysqli_fetch_assoc($result) : null;
+            mysqli_stmt_close($statement);
 
-        if ($row = $result->fetch_assoc()) {
-            // Support both existing plain-text records and password hashes.
-            $passwordIsValid = password_verify($password, $row['katalaluan']) || hash_equals((string) $row['katalaluan'], $password);
-            if ($passwordIsValid) {
-                $_SESSION['user_id'] = $row['id'];
-                $_SESSION['username'] = $row['no_kp'];
-                $_SESSION['nama'] = $row['nama'];
-                $_SESSION['role'] = 'admin';
+            $validPassword = $account && (
+                password_verify($password, (string) $account['katalaluan']) ||
+                hash_equals((string) $account['katalaluan'], $password)
+            );
 
-                header("Location: admin_dashboard.php");
+            if ($validPassword) {
+                session_regenerate_id(true);
+                $_SESSION = [];
+                $_SESSION['role'] = 'staff';
+                $_SESSION['staff_user_id'] = (int) $account['id'];
+                $_SESSION['staff_no_kp'] = (string) $account['no_kp'];
+                $_SESSION['staff_nama'] = (string) $account['nama'];
+                $_SESSION['staff_jawatan'] = (string) $account['jawatan'];
+                header('Location: staf_dashboard.php');
                 exit();
-            } else {
-                $error = "Invalid username or password.";
             }
+
+            $error = 'ID staf atau kata laluan tidak sah.';
         } else {
-            $idResult = $conn->query("SELECT COALESCE(MAX(id), 0) + 1 AS next_id FROM tbladmin");
-            $nextId = (int) $idResult->fetch_assoc()['next_id'];
-            $nama = $username;
-            $jawatan = 'Pengguna';
-            $idJabatan = 0;
-            $lastLogin = '';
-            $level = '1';
-            $akses = 0;
-            $unit = '';
-            $ext = 0;
-            $status = 'aktif';
-            $insertStmt = $conn->prepare("INSERT INTO tbladmin (id, no_kp, nama, jawatan, katalaluan, id_jabatan, last_login, level, akses, unit, ext, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-            $insertStmt->bind_param("issssissisis", $nextId, $username, $nama, $jawatan, $password, $idJabatan, $lastLogin, $level, $akses, $unit, $ext, $status);
-
-            if ($insertStmt->execute()) {
-                $_SESSION['user_id'] = $nextId;
-                $_SESSION['username'] = $username;
-                $_SESSION['nama'] = $nama;
-                $_SESSION['role'] = 'admin';
-                header("Location: admin_dashboard.php");
-                exit();
-            }
-
-            $error = "Akaun baharu gagal dicipta. Sila cuba lagi.";
-            $insertStmt->close();
+            $error = 'Log masuk tidak dapat diproses buat masa ini.';
         }
-        $stmt->close();
     }
 }
-$conn->close();
 ?>
-
 <!DOCTYPE html>
 <html lang="ms">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Log Masuk - eHELPDESK PUO</title>
+    <title>Log Masuk Staf - eHELPDESK PUO</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Nunito+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
@@ -151,12 +162,7 @@ $conn->close();
             line-height: 1.65;
         }
 
-        .login-panel {
-            display: flex;
-            align-items: center;
-            padding: 44px;
-        }
-
+        .login-panel { display: flex; align-items: center; padding: 44px; }
         .login-content { width: 100%; max-width: 328px; margin: auto; }
         .login-content h2 { margin: 0 0 2px; font-size: 1.55rem; font-weight: 800; }
         .login-subtitle { margin: 0 0 30px; color: var(--muted); font-size: .84rem; }
@@ -197,20 +203,19 @@ $conn->close();
             box-shadow: 0 0 0 3px rgba(80, 128, 240, .12);
         }
 
-        .notice, .error {
+        .error {
             display: flex;
             gap: 8px;
             align-items: flex-start;
             margin: 3px 0 20px;
             padding: 11px 12px;
+            border: 1px solid #ffcaca;
             border-radius: 8px;
+            background: #fff0f0;
+            color: #a52929;
             font-size: .73rem;
             line-height: 1.45;
         }
-
-        .notice { color: #9a5a00; background: #fff9df; border: 1px solid #ffedaa; }
-        .error { color: #a52929; background: #fff0f0; border: 1px solid #ffcaca; }
-        .notice i, .error i { flex: 0 0 auto; }
 
         .actions { display: grid; grid-template-columns: 1.55fr .8fr; gap: 12px; }
         .actions button {
@@ -226,7 +231,6 @@ $conn->close();
         .submit-button { color: #fff; background: #1765ed; box-shadow: 0 6px 12px rgba(23, 101, 237, .2); }
         .submit-button:hover { background: #0d55d0; }
         .cancel-button { color: #717b86; background: #f1f3f5; }
-
         .public-links {
             display: flex;
             flex-wrap: wrap;
@@ -236,7 +240,6 @@ $conn->close();
             color: #7b8490;
             font-size: .72rem;
         }
-
         .public-links a { color: #1765ed; text-decoration: none; font-weight: 700; }
         .public-links a:hover { text-decoration: underline; }
 
@@ -258,36 +261,35 @@ $conn->close();
             </div>
             <div class="welcome-copy">
                 <h1>Sistem<br>eHELPDESK PUO</h1>
-                <p>Selamat datang ke Sistem eHelpdesk Politeknik Ungku Omar. Sila log masuk menggunakan akaun eHadir anda untuk mengakses sistem.</p>
+                <p>Portal staf untuk menerima tugasan, merekod kemajuan dan mengemas kini status aduan.</p>
             </div>
         </section>
 
         <section class="login-panel">
             <div class="login-content">
-                <h2>Log Masuk</h2>
-                <p class="login-subtitle">Sila masukkan ID dan kata laluan anda</p>
+                <h2>Log Masuk Staf</h2>
+                <p class="login-subtitle">Gunakan akaun eHadir anda untuk melihat tugasan staf.</p>
 
-                <?php if (!empty($error)): ?>
-                    <div class="error"><i class="bi bi-exclamation-circle-fill"></i><span><?php echo htmlspecialchars($error); ?></span></div>
+                <?php if ($error !== ''): ?>
+                    <div class="error" role="alert"><i class="bi bi-exclamation-circle-fill"></i><span><?php echo htmlspecialchars($error, ENT_QUOTES, 'UTF-8'); ?></span></div>
                 <?php endif; ?>
 
-                <form action="<?php echo htmlspecialchars($_SERVER["PHP_SELF"]); ?>" method="POST">
+                <form action="staf_login.php" method="POST">
+                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_staf_login'], ENT_QUOTES, 'UTF-8'); ?>">
                     <div class="field">
-                        <label for="username">ID PENGGUNA</label>
+                        <label for="staff_no_kp">ID STAF ATAU NO. KP</label>
                         <div class="input-wrap">
                             <i class="bi bi-person-fill"></i>
-                            <input id="username" type="text" name="username" maxlength="12" placeholder="Contoh: 10729" autocomplete="username" required>
+                            <input id="staff_no_kp" type="text" name="staff_no_kp" maxlength="12" placeholder="Masukkan id atau no. KP staf" autocomplete="username" required autofocus>
                         </div>
                     </div>
                     <div class="field">
                         <label for="password">KATA LALUAN</label>
                         <div class="input-wrap">
                             <i class="bi bi-lock-fill"></i>
-                            <input id="password" type="password" name="password" minlength="5" maxlength="20" placeholder="Minimum 5 aksara" autocomplete="current-password" required>
+                            <input id="password" type="password" name="password" maxlength="20" placeholder="Masukkan kata laluan" autocomplete="current-password" required>
                         </div>
                     </div>
-
-                    <div class="notice"><i class="bi bi-info-circle-fill"></i><span>ID baharu akan didaftarkan secara automatik dan terus mendapat akses admin.</span></div>
 
                     <div class="actions">
                         <button class="submit-button" type="submit"><i class="bi bi-box-arrow-in-right"></i> Log Masuk</button>
@@ -296,15 +298,8 @@ $conn->close();
                 </form>
 
                 <div class="public-links">
-                    <span>Borang aduan:</span>
-                    <a href="index.php">Umum</a>
-                    <a href="lab1.php">Lab</a>
-                    <a href="library.php">Perpustakaan</a>
-                    <a href="tandas.php">Tandas</a>
-                    <span>Staf bertugas:</span>
-                    <a href="staf_login.php">Portal staf</a>
+                    <a href="login.php"><i class="bi bi-arrow-left me-1"></i>Kembali ke log masuk utama</a>
                 </div>
-
             </div>
         </section>
     </main>

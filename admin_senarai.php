@@ -28,6 +28,7 @@ $result = mysqli_query($conn, $query);
     <style>
         body { background-color: #f4f6f9; font-family: Arial, sans-serif; }
         .sidebar { background: #1e293b; color: white; min-height: 100vh; padding: 20px; }
+        .admin-logo { display: block; width: 155px; max-height: 100px; object-fit: contain; background: #fff; border-radius: 10px; padding: 10px; margin: 0 auto 18px; }
         .sidebar a { color: #94a3b8; text-decoration: none; display: block; padding: 12px 18px; border-radius: 12px; margin-bottom: 8px; transition: 0.2s; font-size: 0.95rem; }
         .sidebar a:hover { background-color: rgba(255, 255, 255, 0.05); color: #ffffff; }
         .sidebar a.active { background-color: #2563eb; color: white; box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3); }
@@ -39,6 +40,7 @@ $result = mysqli_query($conn, $query);
         <div class="row">
             <!-- Sidebar -->
             <div class="col-md-3 col-lg-2 sidebar d-none d-md-block">
+                <img src="puo_logo.png" alt="Logo PUO" class="admin-logo">
                 <h4 class="fw-bold text-white mb-4 ps-2">eHELPDESK <span class="text-primary fs-6">PUO</span></h4>
                 <a href="admin_dashboard.php"><i class="fa-solid fa-chart-line me-2"></i> Dashboard</a>
                 <a href="admin_senarai.php" class="active"><i class="fa-solid fa-table-list me-2"></i> Senarai Aduan</a>

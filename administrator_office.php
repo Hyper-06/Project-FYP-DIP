@@ -16,10 +16,12 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     $department = mysqli_real_escape_string($conn, $specificLocation);
     $email = mysqli_real_escape_string($conn, $_POST['email']);
     $phone = mysqli_real_escape_string($conn, $_POST['phone']);
-    $categoryId = (int) ($_POST['category_id'] ?? 0);
+    $selectedCategory = trim($_POST['category'] ?? '');
+    $categoryId = 0;
     $category = '';
     foreach ($categoryOptions as $categoryOption) {
-        if ((int) $categoryOption['id'] === $categoryId) {
+        if ($categoryOption['jenis'] === $selectedCategory) {
+            $categoryId = (int) $categoryOption['id'];
             $category = mysqli_real_escape_string($conn, $categoryOption['jenis']);
             break;
         }
@@ -38,18 +40,18 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     $status = 'Baru';
 
     $stmt = mysqli_prepare($conn, "INSERT INTO tbllaporan (status, id, no_siri_pendaftaran, no_siri_alat, lokasi, jabatan, kat_laporan, pelapor, ext, emel, tarikh_laporan, kategori_kerosakan, jenis_kerosakan, masalah, tarikh_diterima) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-    mysqli_stmt_bind_param($stmt, 'sisssiisssssssss', $status, $nextId, $noSiriPendaftaran, $noSiriAlat, $department, $jabatan, $categoryId, $pelapor, $ext, $email, $tarikhLaporan, $category, $category, $issue, $tarikhDiterima);
+    mysqli_stmt_bind_param($stmt, 'sisssiissssssss', $status, $nextId, $noSiriPendaftaran, $noSiriAlat, $department, $jabatan, $categoryId, $pelapor, $ext, $email, $tarikhLaporan, $category, $category, $issue, $tarikhDiterima);
 
-    if ($categoryId > 0 && $category !== '' && mysqli_stmt_execute($stmt)) {
+    if ($category !== '' && mysqli_stmt_execute($stmt)) {
         $msg = "Your issue has been submitted successfully!";
     } else {
-        $msg = "Error: " . mysqli_stmt_error($stmt);
+        $msg = "Maaf, aduan anda tidak dapat dihantar buat masa ini. Sila cuba semula.";
     }
     mysqli_stmt_close($stmt);
 }
 
 // Use the LAN address so QR codes work from other devices on the network.
-$qrCodeUrl = "http://10.210.213.104" . $_SERVER['REQUEST_URI'];
+$qrCodeUrl = "http://10.249.122.104" . $_SERVER['REQUEST_URI'];
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -131,10 +133,10 @@ $qrCodeUrl = "http://10.210.213.104" . $_SERVER['REQUEST_URI'];
                             </div>
                             <div class="mb-3">
                                 <label class="form-label fw-bold small text-secondary" style="font-size: 0.75rem;">CATEGORY / KATEGORI</label>
-                                <select name="category_id" class="form-select" required>
+                                <select name="category" class="form-select" required>
                                     <option value="" disabled selected>Pilih kategori aduan</option>
                                     <?php foreach ($categoryOptions as $categoryOption): ?>
-                                        <option value="<?php echo (int) $categoryOption['id']; ?>"><?php echo htmlspecialchars($categoryOption['jenis']); ?></option>
+                                        <option value="<?php echo htmlspecialchars($categoryOption['jenis']); ?>"><?php echo htmlspecialchars($categoryOption['jenis']); ?></option>
                                     <?php endforeach; ?>
                                 </select>
                             </div>
